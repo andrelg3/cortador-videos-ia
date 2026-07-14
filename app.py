@@ -5,8 +5,10 @@ import yt_dlp
 
 app = Flask(__name__)
 
-# Pasta temporária para processar os vídeos na nuvem
+# Diretório base do projeto
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMP_DIR = "/tmp"
+COOKIES_PATH = os.path.join(BASE_DIR, "youtube-cookies.txt")
 
 @app.route('/status', methods=['GET'])
 def status():
@@ -28,17 +30,30 @@ def cortar_video():
     # Remove arquivos de testes anteriores se existirem
     for f in [video_original, video_corte]:
         if os.path.exists(f):
-            os.remove(f)
+            try:
+                os.remove(f)
+            except Exception:
+                pass
 
     try:
-        # 1. Baixa o vídeo do YouTube na nuvem
+        # 1. Configurações de Download
         print(f"Baixando: {url_youtube}")
         ydl_opts = {
             'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
             'outtmpl': video_original,
             'merge_output_format': 'mp4',
-            'quiet': True
+            'quiet': True,
+            'nocheckcertificate': True,
         }
+
+        # Se o arquivo de cookies existir no repositório, aplica ele
+        if os.path.exists(COOKIES_PATH):
+            print("🍪 Usando arquivo de cookies para autenticação.")
+            ydl_opts['cookiefile'] = COOKIES_PATH
+        else:
+            print("⚠️ Arquivo youtube-cookies.txt não foi encontrado no repositório.")
+
+        # Realiza o download
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url_youtube])
 
