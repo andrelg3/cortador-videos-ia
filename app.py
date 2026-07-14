@@ -5,7 +5,6 @@ import yt_dlp
 
 app = Flask(__name__)
 
-# Diretório base do projeto
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMP_DIR = "/tmp"
 COOKIES_PATH = os.path.join(BASE_DIR, "youtube-cookies.txt")
@@ -24,53 +23,53 @@ def cortar_video():
     if not url_youtube or not tempo_inicio or not tempo_fim:
         return jsonify({"erro": "Parâmetros 'url', 'inicio' e 'fim' são obrigatórios."}), 400
 
-    video_original = os.path.join(TEMP_DIR, "video_original.mp4")
+    # Usamos extensões genéricas durante o download temporário
+    video_original = os.path.join(TEMP_DIR, "video_original")
     video_corte = os.path.join(TEMP_DIR, "corte_final.mp4")
 
-    # Remove arquivos de testes anteriores se existirem
-    for f in [video_original, video_corte]:
-        if os.path.exists(f):
+    # Limpa arquivos de execuções anteriores
+    for f in os.listdir(TEMP_DIR):
+        if f.startswith("video_original") or f == "corte_final.mp4":
             try:
-                os.remove(f)
+                os.remove(os.path.join(TEMP_DIR, f))
             except Exception:
                 pass
 
     try:
-        # 1. Configurações de Download
+        # 1. Baixa no formato mais compatível disponível (sem forçar MP4 rígido no download)
         print(f"Baixando: {url_youtube}")
         ydl_opts = {
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-            'outtmpl': video_original,
-            'merge_output_format': 'mp4',
+            'format': 'best',  # Baixa o melhor formato unificado pré-existente
+            'outtmpl': video_original + '.%(ext)s',
             'quiet': True,
             'nocheckcertificate': True,
         }
 
-        # Se o arquivo de cookies existir no repositório, aplica ele
         if os.path.exists(COOKIES_PATH):
             print("🍪 Usando arquivo de cookies para autenticação.")
             ydl_opts['cookiefile'] = COOKIES_PATH
-        else:
-            print("⚠️ Arquivo youtube-cookies.txt não foi encontrado no repositório.")
 
-        # Realiza o download
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url_youtube])
+            info = ydl.extract_info(url_youtube, download=True)
+            # Descobre a extensão real do arquivo que foi baixado (ex: .mp4, .mkv, .webm)
+            ext_real = info.get('ext', 'mp4')
+            arquivo_baixado_real = f"{video_original}.{ext_real}"
 
-        # 2. Executa o corte usando o FFmpeg nativo da nuvem
+        # 2. Executa o corte e converte/força a saída para MP4 compatível
         print(f"Cortando de {tempo_inicio} a {tempo_fim}")
         comando = [
             'ffmpeg', '-y',
             '-ss', tempo_inicio,
             '-to', tempo_fim,
-            '-i', video_original,
-            '-c:v', 'libx264',
-            '-c:a', 'aac',
+            '-i', arquivo_baixado_real,
+            '-c:v', 'libx264',   # Converte o vídeo para o padrão H.264 MP4
+            '-c:a', 'aac',       # Converte o áudio para o padrão AAC
+            '-strict', 'experimental',
             video_corte
         ]
         subprocess.run(comando, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-        # 3. Envia o arquivo de vídeo cortado direto de volta para o n8n
+        # 3. Devolve o arquivo cortado convertido em MP4
         return send_file(video_corte, mimetype='video/mp4', as_attachment=True, download_name='corte.mp4')
 
     except Exception as e:
