@@ -1,5 +1,6 @@
 import os
 import subprocess
+import glob
 from flask import Flask, request, jsonify, send_file
 import yt_dlp
 
@@ -11,7 +12,12 @@ COOKIES_PATH = os.path.join(BASE_DIR, "youtube-cookies.txt")
 
 @app.route('/status', methods=['GET'])
 def status():
-    return jsonify({"status": "Cortador de Vídeo Online!"}), 200
+    # Verifica se o arquivo de cookies realmente existe na pasta para facilitar o debug
+    cookies_detectado = os.path.exists(COOKIES_PATH)
+    return jsonify({
+        "status": "Cortador de Vídeo Online!",
+        "cookies_presente": cookies_detectado
+    }), 200
 
 @app.route('/cortar', methods=['POST'])
 def cortar_video():
@@ -23,11 +29,11 @@ def cortar_video():
     if not url_youtube or not tempo_inicio or not tempo_fim:
         return jsonify({"erro": "Parâmetros 'url', 'inicio' e 'fim' são obrigatórios."}), 400
 
-    # Usamos extensões genéricas durante o download temporário
-    video_original = os.path.join(TEMP_DIR, "video_original")
+    # Usamos uma base genérica para o arquivo baixado
+    video_original_base = os.path.join(TEMP_DIR, "video_original")
     video_corte = os.path.join(TEMP_DIR, "corte_final.mp4")
 
-    # Limpa arquivos de execuções anteriores
+    # Limpa arquivos de execuções anteriores no diretório temporário
     for f in os.listdir(TEMP_DIR):
         if f.startswith("video_original") or f == "corte_final.mp4":
             try:
@@ -36,34 +42,43 @@ def cortar_video():
                 pass
 
     try:
-        # 1. Baixa no formato mais compatível disponível (sem forçar MP4 rígido no download)
         print(f"Baixando: {url_youtube}")
+        
+        # Configuração flexível: baixa o melhor formato disponível (mp4 se possível, ou qualquer outro)
         ydl_opts = {
-            'format': 'best',  # Baixa o melhor formato unificado pré-existente
-            'outtmpl': video_original + '.%(ext)s',
-            'quiet': True,
+            'format': 'best', 
+            'outtmpl': f"{video_original_base}.%(ext)s",
+            'quiet': False,  # Desativamos o quiet para podermos ver o log se der erro
             'nocheckcertificate': True,
         }
 
         if os.path.exists(COOKIES_PATH):
-            print("🍪 Usando arquivo de cookies para autenticação.")
+            print("🍪 Aplicando arquivo de cookies para download direto.")
             ydl_opts['cookiefile'] = COOKIES_PATH
+        else:
+            print("⚠️ ATENÇÃO: youtube-cookies.txt NÃO encontrado na raiz!")
 
+        # Realiza o download direto (método que funcionou contra o bot check)
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url_youtube, download=True)
-            # Descobre a extensão real do arquivo que foi baixado (ex: .mp4, .mkv, .webm)
-            ext_real = info.get('ext', 'mp4')
-            arquivo_baixado_real = f"{video_original}.{ext_real}"
+            ydl.download([url_youtube])
 
-        # 2. Executa o corte e converte/força a saída para MP4 compatível
+        # Como o formato 'best' pode baixar .mp4, .mkv, .webm, buscamos o arquivo real gerado
+        arquivos_baixados = glob.glob(f"{video_original_base}.*")
+        if not arquivos_baixados:
+            raise Exception("O download foi concluído, mas o arquivo de vídeo não foi encontrado no disco.")
+        
+        arquivo_baixado_real = arquivos_baixados[0]
+        print(f"Arquivo baixado com sucesso em: {arquivo_baixado_real}")
+
+        # 2. Executa o corte e força a saída a ser convertida em um MP4 perfeito
         print(f"Cortando de {tempo_inicio} a {tempo_fim}")
         comando = [
             'ffmpeg', '-y',
             '-ss', tempo_inicio,
             '-to', tempo_fim,
             '-i', arquivo_baixado_real,
-            '-c:v', 'libx264',   # Converte o vídeo para o padrão H.264 MP4
-            '-c:a', 'aac',       # Converte o áudio para o padrão AAC
+            '-c:v', 'libx264',   # Garante a conversão de vídeo para H.264
+            '-c:a', 'aac',       # Garante a conversão de áudio para AAC
             '-strict', 'experimental',
             video_corte
         ]
